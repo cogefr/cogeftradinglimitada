@@ -1,0 +1,100 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // The permissions object of the role assigned to the caller's own profile, if any.
+    function myRolePermissions() {
+      return get(/databases/$(database)/documents/roles/
+        $(get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data.roleId)).data.permissions;
+    }
+
+    // True only for users whose own role grants "Users & Roles -> Edit"
+    // (the same capability that unlocks Group Permission / Roles / Users in the app).
+    function isUserAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/userProfiles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data.roleId != null
+        && exists(/databases/$(database)/documents/roles/
+             $(get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data.roleId))
+        && myRolePermissions().user.edit == true;
+    }
+
+    // Does the role being assigned in this write grant admin-level "Users & Roles" access?
+    function targetRoleIsElevated(roleId) {
+      return roleId != null
+        && exists(/databases/$(database)/documents/roles/$(roleId))
+        && get(/databases/$(database)/documents/roles/$(roleId)).data.permissions.user.edit == true;
+    }
+
+    // Roles define every permission in the system — only admins may create/edit/delete them.
+    // Everyone signed in can still read roles (needed to look up module permissions on login).
+    match /roles/{roleId} {
+      allow read: if isSignedIn();
+      allow write: if isUserAdmin();
+    }
+
+    // User profiles assign a role to each account.
+    match /userProfiles/{uid} {
+      // Read your own profile (needed to bootstrap your permissions on login) or, if you're an
+      // admin, read/list anyone's profile to manage users.
+      allow get: if isSignedIn() && (request.auth.uid == uid || isUserAdmin());
+      allow list: if isUserAdmin();
+
+      // Editing/deleting an existing account always requires admin rights.
+      allow update, delete: if isUserAdmin();
+
+      // Creating an account: admins can create any profile. The app's "Add User" flow briefly
+      // signs in AS the brand-new account before writing its profile doc, so we also allow a
+      // brand-new user to write their own first-ever profile doc — but only if the role being
+      // assigned to them is NOT an admin-level ("Users & Roles" edit) role. This lets admins add
+      // ordinary staff (Cashier, Sales, Warehouse Manager, Viewer, etc.) normally, while blocking
+      // any self-signup path from ever self-assigning admin rights.
+      allow create: if isUserAdmin()
+        || (
+          request.auth.uid == uid
+          && !exists(/databases/$(database)/documents/userProfiles/$(uid))
+          && !targetRoleIsElevated(request.resource.data.roleId)
+        );
+    }
+
+    // Access-scoping data tied to the permission model — admin-managed, readable by anyone signed in.
+    match /userCategories/{id} {
+      allow read: if isSignedIn();
+      allow write: if isUserAdmin();
+    }
+
+    // App-wide organization/company settings (name, logo, addresses, tax & bank info) shown to
+    // every signed-in user — only admins can change it, since it appears on every printed
+    // invoice/voucher and the app branding.
+    match /settings/{id} {
+      allow read: if isSignedIn();
+      allow write: if isUserAdmin();
+    }
+
+    // Business data: any signed-in user for now — the app's Group Permission screen enforces the
+    // detailed per-module view/add/edit/delete matrix on the client for these collections.
+    // (See note below on why these aren't locked down further yet.)
+    match /warehouses/{id}     { allow read, write: if isSignedIn(); }
+    match /products/{id}       { allow read, write: if isSignedIn(); }
+    match /stock/{id}          { allow read, write: if isSignedIn(); }
+    match /purchases/{id}      { allow read, write: if isSignedIn(); }
+    match /sales/{id}          { allow read, write: if isSignedIn(); }
+    match /quotations/{id}     { allow read, write: if isSignedIn(); }
+    match /transfers/{id}      { allow read, write: if isSignedIn(); }
+    match /returns/{id}        { allow read, write: if isSignedIn(); }
+    match /adjustments/{id}    { allow read, write: if isSignedIn(); }
+    match /stockCounts/{id}    { allow read, write: if isSignedIn(); }
+    match /expenses/{id}       { allow read, write: if isSignedIn(); }
+    match /customers/{id}      { allow read, write: if isSignedIn(); }
+    match /payments/{id}       { allow read, write: if isSignedIn(); }
+    match /brands/{id}         { allow read, write: if isSignedIn(); }
+    match /categories/{id}     { allow read, write: if isSignedIn(); }
+    match /taxes/{id}          { allow read, write: if isSignedIn(); }
+    match /volumes/{id}        { allow read, write: if isSignedIn(); }
+    match /invoiceNumbers/{id} { allow read, write: if isSignedIn(); }
+  }
+}
